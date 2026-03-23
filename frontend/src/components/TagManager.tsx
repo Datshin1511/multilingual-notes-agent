@@ -39,7 +39,7 @@ export default function TagManager({ session }: { session: Session }) {
           : tags.map((t) => (
               <span key={t} className="tag tag-active text-[11px] group">
                 {t}
-                <button onClick={() => remove(t)} disabled={busy}
+                <button title="remove" onClick={() => remove(t)} disabled={busy}
                         className="opacity-60 group-hover:opacity-100 transition-opacity">
                   <X size={9} />
                 </button>
@@ -53,7 +53,7 @@ export default function TagManager({ session }: { session: Session }) {
         <input className="input py-2 text-xs flex-1" placeholder="Add tag…"
                value={input} onChange={(e) => setInput(e.target.value)}
                onKeyDown={(e) => e.key === 'Enter' && add(input)} disabled={busy} />
-        <button onClick={() => add(input)} disabled={busy || !input.trim()}
+        <button title="add" onClick={() => add(input)} disabled={busy || !input.trim()}
                 className="btn-ghost py-2 px-3"><Plus size={13} /></button>
       </div>
 

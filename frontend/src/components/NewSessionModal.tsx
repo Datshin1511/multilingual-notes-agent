@@ -87,7 +87,7 @@ export default function NewSessionModal({ onClose }: { onClose: () => void }) {
             <h2 className="font-body font-semibold text-white">New Session</h2>
             <p className="text-xs text-slate-500 mt-0.5 font-mono">Step {step} / 2</p>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button title="close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
 
         {/* Step bar */}
@@ -141,7 +141,7 @@ export default function NewSessionModal({ onClose }: { onClose: () => void }) {
               <div>
                 <label className="label flex items-center gap-1.5 mb-2"><Globe size={10} />Output Language</label>
                 <div className="relative">
-                  <select className="input appearance-none pr-9 cursor-pointer"
+                  <select title="language" className="input appearance-none pr-9 cursor-pointer"
                           value={lang} onChange={(e) => setLang(e.target.value)}>
                     {LANGS.map((l) => <option key={l.code} value={l.code}>{l.name}</option>)}
                   </select>

@@ -51,7 +51,7 @@ export default function ExportModal({ session, onClose }: { session: Session; on
               <p className="text-[11px] text-slate-500 truncate max-w-[200px]">{session.name}</p>
             </div>
           </div>
-          <button onClick={onClose} className="btn-icon"><X size={16} /></button>
+          <button title = "close" onClick={onClose} className="btn-icon"><X size={16} /></button>
         </div>
 
         <div className="px-5 py-4 space-y-2">

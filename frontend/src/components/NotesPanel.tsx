@@ -140,13 +140,13 @@ export default function NotesPanel({ notes, sessionId }: { notes?: Notes; sessio
             <div className="flex gap-1.5">
               {editing ? (
                 <>
-                  <button onClick={() => setEditing(false)} className="btn-icon w-6 h-6"><X size={12} /></button>
+                  <button title="edit" onClick={() => setEditing(false)} className="btn-icon w-6 h-6"><X size={12} /></button>
                   <button onClick={() => void save()} className="btn-primary py-1 px-2.5 text-xs">
                     <Save size={11} />Save
                   </button>
                 </>
               ) : (
-                <button onClick={() => { setDraft(notes.user_notes ?? ''); setEditing(true) }}
+                <button title="draft" onClick={() => { setDraft(notes.user_notes ?? ''); setEditing(true) }}
                         className="btn-icon w-6 h-6"><Edit3 size={12} /></button>
               )}
             </div>

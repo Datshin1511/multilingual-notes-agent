@@ -66,6 +66,7 @@ export default function SessionCard({ session, index }: Props) {
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <StatusBadge status={session.status} />
           <button
+            title="delete"
             onClick={del}
             className="btn-icon opacity-0 group-hover:opacity-100 w-6 h-6 rounded-md text-slate-600 hover:text-danger hover:bg-danger/10"
           >
