@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Search, Mic2, Zap, CheckCircle2, Loader2 } from 'lucide-react'
+import { Plus, Search, Mic2, CheckCircle2, Loader2 } from 'lucide-react'
 import { useBootstrap } from '@/hooks/useSession'
 import useStore from '@/store/useStore'
 import SessionCard from '@/components/SessionCard'
