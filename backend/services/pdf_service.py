@@ -3,13 +3,41 @@ PDF export service using WeasyPrint.
 Generates a styled PDF from session data (transcript + notes).
 """
 
+import json
 import logging
-import os
 from datetime import datetime
 from typing import Optional
-from config import settings
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────
+# SAFE COERCIONS
+# ─────────────────────────────────────────────
+
+def _as_list(value) -> list:
+    """
+    Safely coerce a field to a plain Python list.
+    Handles: None, already-a-list, JSON string, and any other scalar.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except (json.JSONDecodeError, ValueError):
+            return []
+    return []
+
+
+def _as_str(value, fallback: str = "") -> str:
+    """Return a string or a safe fallback — never None."""
+    if value is None:
+        return fallback
+    return str(value)
 
 
 # ─────────────────────────────────────────────
@@ -26,7 +54,9 @@ LANGUAGE_NAMES = {
 }
 
 
-def _lang_name(code: str) -> str:
+def _lang_name(code: Optional[str]) -> str:
+    if not code:
+        return "Unknown"
     return LANGUAGE_NAMES.get(code.lower(), code.upper())
 
 
@@ -40,28 +70,33 @@ def _format_duration(seconds: Optional[float]) -> str:
     return f"{mins}m {secs}s"
 
 
-def _tag_html(tags: list) -> str:
-    if not tags:
-        return '<span class="no-tags">No tags</span>'
-    return "".join(f'<span class="tag">{t}</span>' for t in tags)
-
-
-def _bullet_html(items: list, empty_msg: str = "None") -> str:
+def _tag_html(tags) -> str:
+    items = _as_list(tags)
     if not items:
+        return '<span class="no-tags">No tags</span>'
+    return "".join(f'<span class="tag">{t}</span>' for t in items)
+
+
+def _bullet_html(items, empty_msg: str = "None") -> str:
+    coerced = _as_list(items)
+    if not coerced:
         return f'<p class="empty">{empty_msg}</p>'
-    return "<ul>" + "".join(f"<li>{item}</li>" for item in items) + "</ul>"
+    return "<ul>" + "".join(f"<li>{item}</li>" for item in coerced) + "</ul>"
 
 
-def _segment_rows(segments: list, show_translation: bool) -> str:
-    if not segments:
+def _segment_rows(segments, show_translation: bool) -> str:
+    items = _as_list(segments)
+    if not items:
         return '<tr><td colspan="3" class="empty">No segments available</td></tr>'
     rows = []
-    for seg in segments:
-        start = seg.get("start", 0)
-        end = seg.get("end", 0)
-        ts = f"{int(start//60):02d}:{int(start%60):02d} – {int(end//60):02d}:{int(end%60):02d}"
-        text = seg.get("text", "")
-        trans = seg.get("translated_text") or ""
+    for seg in items:
+        if not isinstance(seg, dict):
+            continue
+        start = seg.get("start", 0) or 0
+        end   = seg.get("end",   0) or 0
+        ts    = f"{int(start//60):02d}:{int(start%60):02d} – {int(end//60):02d}:{int(end%60):02d}"
+        text  = _as_str(seg.get("text", ""))
+        trans = _as_str(seg.get("translated_text", ""))
         if show_translation and trans and trans != text:
             rows.append(f"<tr><td class='ts'>{ts}</td><td>{text}</td><td>{trans}</td></tr>")
         else:
@@ -73,69 +108,86 @@ def _segment_rows(segments: list, show_translation: bool) -> str:
 # HTML TEMPLATE
 # ─────────────────────────────────────────────
 
+# System-safe font stack — no network request, no crash.
+# WeasyPrint will pick up whatever sans-serif the OS has (DejaVu, Liberation, etc.)
+_FONT_CSS = """
+  body {
+    font-family: -apple-system, 'Helvetica Neue', Arial, 'Liberation Sans', sans-serif;
+  }
+"""
+
+
 def _build_html(session, transcript, notes, options: dict) -> str:
     include_transcript = options.get("include_transcript", True)
     include_translated = options.get("include_translated", True)
-    include_notes = options.get("include_notes", True)
-    include_segments = options.get("include_segments", False)
+    include_notes      = options.get("include_notes", True)
+    include_segments   = options.get("include_segments", False)
 
     export_date = datetime.now().strftime("%B %d, %Y at %H:%M")
-    src_lang = _lang_name(transcript.detected_language or "?") if transcript else "?"
-    tgt_lang = _lang_name(session.target_language)
-    duration = _format_duration(transcript.duration_seconds if transcript else None)
-    words = transcript.word_count if transcript else 0
-    tags_html = _tag_html(session.tags or [])
 
-    # Notes section HTML
+    # Safe field reads — never trust ORM fields to be the expected Python type
+    detected_lang  = _as_str(getattr(transcript, "detected_language", None), "?")
+    target_lang    = _as_str(getattr(session,    "target_language",   None), "?")
+    src_lang       = _lang_name(detected_lang)
+    tgt_lang       = _lang_name(target_lang)
+    duration       = _format_duration(getattr(transcript, "duration_seconds", None) if transcript else None)
+    words          = getattr(transcript, "word_count", 0) or 0
+    tags_html      = _tag_html(getattr(session, "tags", None))
+    audio_filename = _as_str(getattr(session, "audio_filename", None), "N/A")
+    description    = _as_str(getattr(session, "description",    None))
+
+    # ── Notes section ─────────────────────────────────────────────────────────
     notes_section = ""
     if include_notes and notes:
-        summary_html = f"<p>{notes.summary}</p>" if notes.summary else '<p class="empty">No summary available.</p>'
-        action_html = _bullet_html(notes.action_items or [], "No action items identified.")
-        bullet_html = _bullet_html(notes.bullet_points or [], "No key points extracted.")
-        topics_html = "".join(f'<span class="topic-chip">{t}</span>' for t in (notes.key_topics or []))
-        quotes_html = "".join(
-            f'<blockquote>{q}</blockquote>' for q in (notes.important_quotes or [])
+        summary      = _as_str(getattr(notes, "summary",          None))
+        action_items = _as_list(getattr(notes, "action_items",     None))
+        bullet_pts   = _as_list(getattr(notes, "bullet_points",    None))
+        key_topics   = _as_list(getattr(notes, "key_topics",       None))
+        imp_quotes   = _as_list(getattr(notes, "important_quotes", None))
+        user_notes   = _as_str(getattr(notes, "user_notes",       None))
+
+        summary_html = f"<p>{summary}</p>" if summary else '<p class="empty">No summary available.</p>'
+        action_html  = _bullet_html(action_items, "No action items identified.")
+        bullet_html  = _bullet_html(bullet_pts,   "No key points extracted.")
+        topics_html  = "".join(f'<span class="topic-chip">{t}</span>' for t in key_topics)
+        quotes_html  = "".join(
+            f'<blockquote>{q}</blockquote>' for q in imp_quotes
         ) or '<p class="empty">No notable quotes.</p>'
-        user_notes_html = f"<p>{notes.user_notes}</p>" if notes and notes.user_notes else ""
+        user_notes_html = f"<p>{user_notes}</p>" if user_notes else ""
 
         notes_section = f"""
         <div class="section notes-section">
             <h2><span class="section-icon">📝</span> Notes</h2>
-
             <div class="subsection">
                 <h3>Summary</h3>
                 {summary_html}
             </div>
-
             <div class="subsection">
                 <h3>Key Points</h3>
                 {bullet_html}
             </div>
-
             <div class="subsection">
                 <h3>Key Topics</h3>
                 <div class="topics-row">{topics_html if topics_html else '<p class="empty">None</p>'}</div>
             </div>
-
             <div class="subsection">
                 <h3>Action Items</h3>
                 {action_html}
             </div>
-
             <div class="subsection">
                 <h3>Notable Quotes</h3>
                 {quotes_html}
             </div>
-
             {f'<div class="subsection"><h3>Personal Notes</h3>{user_notes_html}</div>' if user_notes_html else ''}
         </div>
         """
 
-    # Transcript section HTML
+    # ── Transcript section ────────────────────────────────────────────────────
     transcript_section = ""
     if include_transcript and transcript:
-        raw_text = transcript.raw_text or ""
-        translated_text = transcript.translated_text or ""
+        raw_text        = _as_str(getattr(transcript, "raw_text",        None))
+        translated_text = _as_str(getattr(transcript, "translated_text", None))
+        segments        = getattr(transcript, "segments", None)
 
         trans_block = ""
         if include_translated and translated_text and translated_text != raw_text:
@@ -147,15 +199,15 @@ def _build_html(session, transcript, notes, options: dict) -> str:
             """
 
         segments_block = ""
-        if include_segments and transcript.segments:
-            has_trans = bool(translated_text and translated_text != raw_text)
-            header_cols = "<th>Timestamp</th><th>Original</th>" + ("<th>Translation</th>" if has_trans else "")
+        if include_segments and segments:
+            has_trans    = bool(translated_text and translated_text != raw_text)
+            header_cols  = "<th>Timestamp</th><th>Original</th>" + ("<th>Translation</th>" if has_trans else "")
             segments_block = f"""
             <div class="subsection">
                 <h3>Segments</h3>
                 <table class="segments-table">
                     <thead><tr>{header_cols}</tr></thead>
-                    <tbody>{_segment_rows(transcript.segments, has_trans)}</tbody>
+                    <tbody>{_segment_rows(segments, has_trans)}</tbody>
                 </table>
             </div>
             """
@@ -165,7 +217,7 @@ def _build_html(session, transcript, notes, options: dict) -> str:
             <h2><span class="section-icon">🎙️</span> Transcript</h2>
             <div class="subsection">
                 <h3>Original <span class="lang-badge">{src_lang}</span></h3>
-                <p class="transcript-text">{raw_text}</p>
+                <p class="transcript-text">{raw_text if raw_text else '<span class="empty">No transcript text available.</span>'}</p>
             </div>
             {trans_block}
             {segments_block}
@@ -177,8 +229,6 @@ def _build_html(session, transcript, notes, options: dict) -> str:
 <head>
 <meta charset="UTF-8"/>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
   :root {{
     --primary: #6C63FF;
     --primary-light: #EEF0FF;
@@ -196,7 +246,8 @@ def _build_html(session, transcript, notes, options: dict) -> str:
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
   body {{
-    font-family: 'Inter', sans-serif;
+    /* No Google Fonts import — zero network calls from WeasyPrint */
+    font-family: -apple-system, 'Helvetica Neue', Arial, 'Liberation Sans', sans-serif;
     background: var(--bg);
     color: var(--mid);
     font-size: 10pt;
@@ -450,7 +501,7 @@ def _build_html(session, transcript, notes, options: dict) -> str:
 <div class="cover">
   <div class="cover-badge">🎙 Multilingual Notes Agent</div>
   <h1>{session.name}</h1>
-  {f'<p style="color:rgba(255,255,255,0.65);margin-top:8px;position:relative;z-index:1">{session.description}</p>' if session.description else ''}
+  {f'<p style="color:rgba(255,255,255,0.65);margin-top:8px;position:relative;z-index:1">{description}</p>' if description else ''}
   <div class="cover-meta">
     <div class="meta-item">
       <span class="label">Source Language</span>
@@ -489,7 +540,7 @@ def _build_html(session, transcript, notes, options: dict) -> str:
 
 <!-- FOOTER -->
 <div class="footer">
-  Generated by <strong>Multilingual Notes Agent</strong> · {export_date} · {session.audio_filename or 'N/A'}
+  Generated by <strong>Multilingual Notes Agent</strong> · {export_date} · {audio_filename}
 </div>
 
 </body>
@@ -505,15 +556,15 @@ def generate_pdf(session, transcript, notes, options: dict = None) -> bytes:
     Generate a PDF from session data.
 
     Args:
-        session: Session ORM object
+        session:    Session ORM object
         transcript: Transcript ORM object (or None)
-        notes: Notes ORM object (or None)
-        options: ExportRequest dict
+        notes:      Notes ORM object (or None)
+        options:    ExportRequest dict
 
     Returns:
         PDF as bytes
     """
-    from weasyprint import HTML, CSS
+    from weasyprint import HTML
 
     if options is None:
         options = {}
@@ -521,9 +572,10 @@ def generate_pdf(session, transcript, notes, options: dict = None) -> bytes:
     html_content = _build_html(session, transcript, notes, options)
 
     try:
-        pdf_bytes = HTML(string=html_content).write_pdf()
-        logger.info(f"PDF generated for session {session.id}, size: {len(pdf_bytes):,} bytes")
+        # presentational_hints=True lets WeasyPrint honour basic HTML attributes
+        pdf_bytes = HTML(string=html_content).write_pdf(presentational_hints=True)
+        logger.info("PDF generated for session %s — %d bytes", session.id, len(pdf_bytes))
         return pdf_bytes
     except Exception as e:
-        logger.error(f"PDF generation failed: {e}")
+        logger.exception("WeasyPrint render failed for session %s", session.id)
         raise
